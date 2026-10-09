@@ -1,0 +1,396 @@
+
+pipeline {
+    agent { label 'jenkins-agent-1' }
+
+    tools {
+        jdk 'JDK21'
+        maven 'Default Maven'
+    }
+
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'stage', 'uat', 'prod'],
+            description: 'Select environment'
+        )
+
+        string(
+            name: 'DEPLOYMENT_VERSION',
+            defaultValue: '1.0.0',
+            description: 'Application version'
+        )
+
+        choice(
+            name: 'INSTANCE_TYPE',
+            choices: ['t3.micro', 't3.small', 't3.medium', 't3.large'],
+            description: 'EC2 instance type'
+        )
+
+        booleanParam(
+            name: 'DATABASE_ENABLED',
+            defaultValue: true,
+            description: 'Enable database'
+        )
+
+        booleanParam(
+            name: 'MONITORING_ENABLED',
+            defaultValue: true,
+            description: 'Enable monitoring'
+        )
+
+        booleanParam(
+            name: 'BACKUP_ENABLED',
+            defaultValue: false,
+            description: 'Enable backup'
+        )
+
+        choice(
+            name: 'LOG_LEVEL',
+            choices: ['DEBUG', 'INFO', 'WARN', 'ERROR'],
+            description: 'Application log level'
+        )
+    }
+
+    environment {
+        REPO_URL = 'https://github.com/shahid8256/jenkins-config-automation.git'
+        REPO_DIR = 'repository'
+        SONAR_URL = 'http://13.234.213.65:9002'
+        NEXUS_URL = 'http://13.234.213.65:8082'
+        NEXUS_REPOSITORY = 'jenkins-automation'
+    }
+
+    stages {
+
+        stage('Validate Inputs') {
+            steps {
+                script {
+                    if (!params.DEPLOYMENT_VERSION.matches(
+                        '[0-9]+[.][0-9]+[.][0-9]+'
+                    )) {
+                        error('Use a version such as 1.0.0')
+                    }
+                }
+            }
+        }
+
+        stage('Checkout Repository') {
+            steps {
+                dir("${REPO_DIR}") {
+                    git(
+                        branch: 'main',
+                        credentialsId: 'github-pat',
+                        url: "${REPO_URL}"
+                    )
+
+                    sh '''
+                        git config user.name "Jenkins"
+                        git config user.email "jenkins@example.com"
+                    '''
+
+                    sh """
+                        git checkout -B feature/environment-${ENVIRONMENT}
+                    """
+                }
+            }
+        }
+
+        stage('Create Java Application') {
+            steps {
+                dir("${REPO_DIR}") {
+                    sh 'mkdir -p java-app/src/main/java'
+
+                    writeFile(
+                        file: 'java-app/src/main/java/App.java',
+                        text: '''
+public class App {
+    public static void main(String[] args) {
+        System.out.println("Hello from Jenkins CI/CD!");
+    }
+}
+'''
+                    )
+
+                    writeFile(
+                        file: 'java-app/pom.xml',
+                        text: """
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>jenkins-java-app</artifactId>
+    <version>${params.DEPLOYMENT_VERSION}</version>
+
+    <properties>
+        <maven.compiler.release>17</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.2</version>
+            </plugin>
+
+            <plugin>
+                <groupId>org.sonarsource.scanner.maven</groupId>
+                <artifactId>sonar-maven-plugin</artifactId>
+                <version>5.1.0.4751</version>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>
+"""
+                    )
+                }
+            }
+        }
+
+        stage('Update Environment JSON') {
+            steps {
+                dir("${REPO_DIR}") {
+                    script {
+                        def filePath =
+                            "Environment/${params.ENVIRONMENT}.json"
+
+                        def config = readJSON(file: filePath)
+
+                        config['environment'] = params.ENVIRONMENT
+                        config['deploymentVersion'] = params.DEPLOYMENT_VERSION
+                        config['instanceType'] = params.INSTANCE_TYPE
+                        config['databaseEnabled'] = params.DATABASE_ENABLED
+                        config['monitoringEnabled'] = params.MONITORING_ENABLED
+                        config['backupEnabled'] = params.BACKUP_ENABLED
+                        config['logLevel'] = params.LOG_LEVEL
+
+                        config['testMessage'] =
+                            'Testing automatic PR and merge from Jenkins'
+
+                        writeJSON(
+                            file: filePath,
+                            json: config,
+                            pretty: 4
+                        )
+                    }
+                }
+            }
+        }
+
+        stage('Validate JSON') {
+            steps {
+                dir("${REPO_DIR}") {
+                    sh """
+                        python3 -m json.tool Environment/${ENVIRONMENT}.json > /dev/null
+                    """
+                }
+            }
+        }
+
+        stage('Maven Build') {
+            steps {
+                dir("${REPO_DIR}/java-app") {
+                    sh 'mvn -B clean verify'
+                }
+
+                archiveArtifacts(
+                    artifacts: 'repository/java-app/target/*.jar',
+                    fingerprint: true
+                )
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                dir("${REPO_DIR}/java-app") {
+                    withSonarQubeEnv('SonarQube') {
+                        sh """
+                            mvn -B sonar:sonar \
+                            -Dsonar.projectKey=jenkins-java-app \
+                            -Dsonar.projectName=jenkins-java-app \
+                            -Dsonar.host.url=${SONAR_URL}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Push Feature Branch') {
+            steps {
+                dir("${REPO_DIR}") {
+                    sh """
+                        git add Environment/${ENVIRONMENT}.json \
+                            java-app/src/main/java/App.java \
+                            java-app/pom.xml
+
+                        git commit -m "Update ${ENVIRONMENT} configuration and Java app" || echo "No changes to commit"
+                    """
+
+                    withCredentials([
+                        usernamePassword(
+                            credentialsId: 'github-pat',
+                            usernameVariable: 'GIT_USERNAME',
+                            passwordVariable: 'GIT_TOKEN'
+                        )
+                    ]) {
+                        sh '''
+                            set +x
+
+                            ASKPASS_FILE="$WORKSPACE/askpass.sh"
+
+                            cat > "$ASKPASS_FILE" <<'EOF'
+#!/bin/sh
+case "$1" in
+    *Username*) printf '%s\\n' "$GIT_USERNAME" ;;
+    *Password*) printf '%s\\n' "$GIT_TOKEN" ;;
+esac
+EOF
+
+                            chmod 700 "$ASKPASS_FILE"
+
+                            export GIT_ASKPASS="$ASKPASS_FILE"
+                            export GIT_TERMINAL_PROMPT=0
+
+                            git push --force-with-lease origin \
+                                "HEAD:refs/heads/feature/environment-${ENVIRONMENT}"
+
+                            rm -f "$ASKPASS_FILE"
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Create and Merge Pull Request') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'github-pat',
+                        usernameVariable: 'GIT_USERNAME',
+                        passwordVariable: 'GITHUB_TOKEN'
+                    )
+                ]) {
+                    sh '''
+                        set +x
+                        set -eu
+
+                        API="https://api.github.com/repos/shahid8256/jenkins-config-automation"
+                        BRANCH="feature/environment-${ENVIRONMENT}"
+
+                        # Create the pull request
+                        HTTP_CODE=$(curl -sS \
+                            -o pr-response.json \
+                            -w "%{http_code}" \
+                            -X POST "$API/pulls" \
+                            -H "Authorization: Bearer $GITHUB_TOKEN" \
+                            -H "Accept: application/vnd.github+json" \
+                            -H "X-GitHub-Api-Version: 2022-11-28" \
+                            -d "$(python3 -c 'import json,os; print(json.dumps({"title":"Update "+os.environ["ENVIRONMENT"]+" environment","head":"feature/environment-"+os.environ["ENVIRONMENT"],"base":"main","body":"Automated pull request created by Jenkins."}))')")
+
+                        if [ "$HTTP_CODE" = "201" ]; then
+                            PR_NUMBER=$(python3 -c 'import json; print(json.load(open("pr-response.json"))["number"])')
+
+                        elif [ "$HTTP_CODE" = "422" ]; then
+                            # Find an existing open pull request
+                            PR_NUMBER=$(curl -fsS \
+                                -H "Authorization: Bearer $GITHUB_TOKEN" \
+                                -H "Accept: application/vnd.github+json" \
+                                "$API/pulls?head=shahid8256:${BRANCH}&base=main" |
+                                python3 -c 'import json,sys; prs=json.load(sys.stdin); print(prs[0]["number"] if prs else "")')
+
+                            if [ -z "$PR_NUMBER" ]; then
+                                echo "Could not create or find an open pull request."
+                                cat pr-response.json
+                                exit 1
+                            fi
+                        else
+                            echo "Pull request creation failed: HTTP $HTTP_CODE"
+                            cat pr-response.json
+                            exit 1
+                        fi
+
+                        echo "Pull request number: $PR_NUMBER"
+
+                        # Attempt to merge the pull request
+                        MERGE_CODE=$(curl -sS \
+                            -o merge-response.json \
+                            -w "%{http_code}" \
+                            -X PUT "$API/pulls/$PR_NUMBER/merge" \
+                            -H "Authorization: Bearer $GITHUB_TOKEN" \
+                            -H "Accept: application/vnd.github+json" \
+                            -H "X-GitHub-Api-Version: 2022-11-28" \
+                            -d '{"merge_method":"merge"}')
+
+                        if [ "$MERGE_CODE" != "200" ]; then
+                            echo "GitHub merge failed: HTTP $MERGE_CODE"
+                            cat merge-response.json
+                            exit 1
+                        fi
+
+                        python3 -c '
+import json
+r=json.load(open("merge-response.json"))
+if not r.get("merged"):
+    raise SystemExit("Pull request was not merged: "+r.get("message","unknown reason"))
+print("Pull request merged successfully:", r.get("sha",""))
+'
+
+                        rm -f pr-response.json merge-response.json
+                    '''
+                }
+            }
+        }
+
+        stage('Upload to Nexus') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'nexus-credentials',
+                        usernameVariable: 'NEXUS_USERNAME',
+                        passwordVariable: 'NEXUS_PASSWORD'
+                    )
+                ]) {
+                    sh '''
+                        set +x
+
+                        JAR_FILE="$WORKSPACE/repository/java-app/target/jenkins-java-app-${DEPLOYMENT_VERSION}.jar"
+
+                        if [ ! -f "$JAR_FILE" ]; then
+                            echo "JAR file not found: $JAR_FILE"
+                            exit 1
+                        fi
+
+                        curl --fail --show-error \
+                            --user "$NEXUS_USERNAME:$NEXUS_PASSWORD" \
+                            --upload-file "$JAR_FILE" \
+                            "$NEXUS_URL/repository/$NEXUS_REPOSITORY/com/example/jenkins-java-app/$DEPLOYMENT_VERSION/jenkins-java-app-$DEPLOYMENT_VERSION.jar"
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            sh 'rm -f "$WORKSPACE/askpass.sh"'
+        }
+
+        success {
+            echo 'Pipeline completed successfully.'
+        }
+
+        failure {
+            echo 'Pipeline failed. Check the first failed stage in Console Output.'
+        }
+    }
+}
