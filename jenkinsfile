@@ -261,7 +261,7 @@ EOF
                             export GIT_ASKPASS="$ASKPASS_FILE"
                             export GIT_TERMINAL_PROMPT=0
 
-                            git push --force-with-lease origin \
+                            git push origin \
                                 "HEAD:refs/heads/feature/environment-${ENVIRONMENT}"
 
                             rm -f "$ASKPASS_FILE"
@@ -394,3 +394,9 @@ print("Pull request merged successfully:", r.get("sha",""))
         }
     }
 }
+
+
+
+
+
+// Testing Jenkins pipeline changes
