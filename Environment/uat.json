@@ -1,0 +1,6 @@
+{
+  "environment": "uat",
+  "region": "ap-south-1",
+  "replicas": 2,
+  "debug": false
+}

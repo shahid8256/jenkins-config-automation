@@ -1,0 +1,6 @@
+{
+  "environment": "prod",
+  "region": "ap-south-1",
+  "replicas": 3,
+  "debug": false
+}

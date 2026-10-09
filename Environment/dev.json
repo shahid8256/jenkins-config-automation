@@ -1,0 +1,6 @@
+{
+  "environment": "dev",
+  "region": "ap-south-1",
+  "replicas": 1,
+  "debug": true
+}
