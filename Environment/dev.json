@@ -3,7 +3,7 @@
     "region": "ap-south-1",
     "replicas": 1,
     "debug": true,
-    "deploymentVersion": "1.0.0",
+    "deploymentVersion": "1.0.1",
     "instanceType": "t3.micro",
     "databaseEnabled": true,
     "monitoringEnabled": true,
