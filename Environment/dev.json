@@ -8,5 +8,6 @@
     "databaseEnabled": true,
     "monitoringEnabled": true,
     "backupEnabled": false,
-    "logLevel": "DEBUG"
+    "logLevel": "DEBUG",
+    "testMessage": "Testing automatic PR and merge from Jenkins"
 }
